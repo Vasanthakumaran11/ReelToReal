@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link2, Loader2, Upload } from "lucide-react";
 import PlanComposer from "../components/PlanComposer.jsx";
 import InspirationList from "../components/InspirationList.jsx";
@@ -6,7 +6,7 @@ import ReelCard from "../components/ReelCard.jsx";
 import ReelDetail from "../components/ReelDetail.jsx";
 import MapView from "./MapView.jsx";
 import { ingestFile, ingestUrl } from "../lib/api.js";
-import { inspirationPrompts, mapLayers, mapLocations } from "../data/plans.js";
+import { inspirationPrompts, mapLayers } from "../data/plans.js";
 
 const VIEWS = [
   { id: "ask", label: "Ask" },
@@ -14,10 +14,24 @@ const VIEWS = [
   { id: "add", label: "Add a reel" },
 ];
 
-export default function ExploreAI({ reels, onCraft, crafting, onIngested, onToggleSave, onHistory }) {
+export default function ExploreAI({ reels = [], onCraft, crafting, onIngested, onToggleSave, onHistory }) {
   const [view, setView] = useState("ask");
   const [question, setQuestion] = useState("");
   const [openReel, setOpenReel] = useState(null);
+
+  const mapLocations = useMemo(() => {
+    return (reels || [])
+      .filter((r) => r.location?.latitude && r.location?.longitude)
+      .map((r, idx) => ({
+        id: `loc_${r.video_id}`,
+        name: r.place || r.city || "Saved Spot",
+        label: `${r.place || r.city || "Location"} (${r.category || "Spot"})`,
+        lat: r.location.latitude,
+        lng: r.location.longitude,
+        tone: idx === 0 ? "start" : idx % 2 === 0 ? "mid" : "end",
+        reel_id: r.video_id,
+      }));
+  }, [reels]);
 
   return (
     <>
@@ -55,16 +69,25 @@ export default function ExploreAI({ reels, onCraft, crafting, onIngested, onTogg
 
             <section>
               <h2 className="text-lg font-bold text-ink-900">Featured reel insights</h2>
-              <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
-                {reels.slice(0, 6).map((reel) => (
-                  <ReelCard
-                    key={reel.video_id}
-                    reel={reel}
-                    onToggleSave={onToggleSave}
-                    onOpen={setOpenReel}
-                  />
-                ))}
-              </div>
+              {reels.length === 0 ? (
+                <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-ink-500">
+                  <p className="font-medium text-ink-700">No reels added yet</p>
+                  <p className="mt-1 text-xs">
+                    Switch to the &ldquo;Add a reel&rdquo; tab to paste a link or upload a video.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                  {reels.slice(0, 6).map((reel) => (
+                    <ReelCard
+                      key={reel.video_id}
+                      reel={reel}
+                      onToggleSave={onToggleSave}
+                      onOpen={setOpenReel}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
           </div>
           <ReelDetail reel={openReel} onClose={() => setOpenReel(null)} />

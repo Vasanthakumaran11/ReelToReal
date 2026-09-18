@@ -2,15 +2,20 @@ import os
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
+# Workspace paths
+BACKEND_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BACKEND_DIR.parent
+BASE_DIR = ROOT_DIR
 
+# Load environment from root .env and backend/.env
+load_dotenv(ROOT_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env")
 load_dotenv()
 
-# Workspace paths
-BASE_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = BASE_DIR / "videos"
-FRAMES_DIR = BASE_DIR / "frames"
-AUDIO_DIR = BASE_DIR / "audio"
-OUTPUTS_DIR = BASE_DIR / "outputs"
+VIDEOS_DIR = ROOT_DIR / "videos"
+FRAMES_DIR = ROOT_DIR / "frames"
+AUDIO_DIR = ROOT_DIR / "audio"
+OUTPUTS_DIR = ROOT_DIR / "outputs"
 
 for directory in (VIDEOS_DIR, FRAMES_DIR, AUDIO_DIR, OUTPUTS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
