@@ -175,8 +175,8 @@ def _generate_ai_itinerary_plan(
             ],
             "key_dates": [{"date": "Upcoming Trip", "window": "Full Day", "note": "Flexible schedule"}],
             "locations": locations,
-            "steps": [{"label": "Pack essentials", "done": false}],
-            "packing": [{"label": "Camera / Phone", "done": false}]
+            "steps": [{"label": "Pack essentials", "done": False}],
+            "packing": [{"label": "Camera / Phone", "done": False}]
         }
 
     client = genai.Client(api_key=GEMINI_API_KEY)

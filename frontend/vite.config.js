@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       // Point this at the ReelToReal API when you expose the pipeline over HTTP.
       "/api": {
-        target: "http://localhost:8000",
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },
