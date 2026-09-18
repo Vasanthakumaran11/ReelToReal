@@ -13,6 +13,7 @@ from downloader import download_video, extract_or_generate_video_id
 from validator import validate_video_file
 from processor import prepare_video_payload
 from extractor import extract_structured_data
+from geocoder import resolve_location
 
 def check_environment() -> Tuple[bool, Optional[str]]:
     """Step 0: Verify required tools (yt-dlp, ffmpeg, ffprobe) exist and respond."""
@@ -133,6 +134,14 @@ def run_ingestion_pipeline(
         _save_output(video_id, ext_failure)
         return ext_failure
 
+    # --- REAL-WORLD GEOCODING (OpenStreetMap + Google Maps) ---
+    location_details = resolve_location(
+        place=extraction.place,
+        city=extraction.city,
+        country=extraction.country,
+        ocr_text=extraction.ocr_text
+    )
+
     # --- STEP 6: ATTACH METADATA AND RETURN ---
     success_record = IngestionSuccess(
         video_id=video_id,
@@ -144,6 +153,9 @@ def run_ingestion_pipeline(
         audio_present=audio_present,
         duration_seconds=round(duration, 2),
         processing_mode=payload.mode,
+        frames_count=len(payload.frames),
+        audio_file_path=str(payload.audio_path) if payload.audio_path else None,
+        location=location_details,
         category=extraction.category,
         place=extraction.place,
         city=extraction.city,

@@ -64,6 +64,21 @@ class ReelToRealExtraction(BaseModel):
         description="Relevant semantic keywords, hashtags, and themes for retrieval and categorization."
     )
 
+class LocationDetails(BaseModel):
+    """Real-world geographic resolution via OpenStreetMap Nominatim and Google Maps."""
+    resolved_query: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    formatted_address: Optional[str] = None
+    google_maps_url: Optional[str] = None
+    open_street_map_url: Optional[str] = None
+    osm_type: Optional[str] = None
+    osm_id: Optional[str] = None
+    match_precision: Optional[str] = Field(
+        default=None,
+        description="'venue', 'street', 'neighborhood', 'city', 'country', or 'none'"
+    )
+
 class IngestionSuccess(BaseModel):
     video_id: str
     status: Literal["success"] = "success"
@@ -74,6 +89,9 @@ class IngestionSuccess(BaseModel):
     audio_present: bool = True
     duration_seconds: float
     processing_mode: Literal["direct_video", "frame_extraction"]
+    frames_count: int = 0
+    audio_file_path: Optional[str] = None
+    location: Optional[LocationDetails] = None
     category: Optional[str] = None
     place: Optional[str] = None
     city: Optional[str] = None
