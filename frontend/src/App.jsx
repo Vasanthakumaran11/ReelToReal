@@ -7,7 +7,7 @@ import Settings from "./pages/Settings.jsx";
 import { craftPlan, fetchPlans, fetchReels } from "./lib/api.js";
 
 export default function App() {
-  const [tab, setTab] = useState("saved");
+  const [tab, setTab] = useState("plans");
   const [reels, setReels] = useState([]);
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);

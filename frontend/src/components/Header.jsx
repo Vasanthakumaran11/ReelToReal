@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Bookmark, ChevronDown, Settings, Link2, Upload, Menu } from "lucide-react";
+import { Bookmark, ChevronDown, Settings, Link2, Sparkles, Menu } from "lucide-react";
 import Logo from "./Logo.jsx";
 
 const TABS = [
-  { id: "saved", label: "Saved Items", icon: Bookmark },
   { id: "plans", label: "Plans", icon: Link2 },
-  { id: "explore", label: "Explore AI", icon: Upload },
+  { id: "saved", label: "Saved Items", icon: Bookmark },
+  { id: "explore", label: "Explore AI", icon: Sparkles },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -15,8 +15,9 @@ export default function Header({ active, onChange, user = "Alex" }) {
   const getTabClasses = (id) => {
     const isActive = active === id;
     if (!isActive) return "text-slate-600 hover:text-slate-900 hover:bg-black/5";
-    if (id === "saved") return "border border-rose-200 bg-[#fff0f2] text-[#e83d57] font-medium shadow-xs";
     if (id === "plans") return "border border-blue-200 bg-[#e0edff] text-[#2563eb] font-medium shadow-xs";
+    if (id === "saved") return "border border-rose-200 bg-[#fff0f2] text-[#e83d57] font-medium shadow-xs";
+    if (id === "explore") return "border border-indigo-200 bg-[#eef2ff] text-[#4f46e5] font-medium shadow-xs";
     if (id === "settings") return "border border-emerald-200 bg-[#d8f3e5] text-[#059669] font-medium shadow-xs";
     return "border border-slate-200 bg-slate-100 text-slate-800 font-medium";
   };
