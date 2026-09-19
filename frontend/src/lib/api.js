@@ -3,20 +3,44 @@
  */
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://jfkuuxqhckrzyyjvchwk.supabase.co";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_Xjb9nicu9F7l7cj1oDFOXQ_5B45UbK7";
 
 /**
- * Fetch all processed reels from the backend API.
+ * Fetch all processed reels from the backend API, with direct Supabase REST fallback.
  */
 export async function fetchReels() {
   try {
     const res = await fetch(`${BASE}/api/reels`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data;
+      }
+    }
   } catch (err) {
-    console.warn("Could not fetch reels from backend API:", err.message);
-    return [];
+    console.warn("Could not fetch reels from backend API, trying Supabase REST:", err.message);
   }
+
+  // Direct Supabase REST fallback over HTTPS (port 443)
+  try {
+    const sRes = await fetch(`${SUPABASE_URL}/rest/v1/reels?select=*&order=ingested_at.desc`, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+      },
+    });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      if (Array.isArray(sData) && sData.length > 0) {
+        return sData.map((r) => ({ ...r, saved: true }));
+      }
+    }
+  } catch (sErr) {
+    console.warn("Could not fetch reels from Supabase REST:", sErr.message);
+  }
+
+  return [];
 }
 
 /**
@@ -25,13 +49,31 @@ export async function fetchReels() {
 export async function fetchPlans() {
   try {
     const res = await fetch(`${BASE}/api/plans`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) return data;
+    }
   } catch (err) {
     console.warn("Could not fetch plans from backend API:", err.message);
-    return [];
   }
+
+  // Direct Supabase REST fallback
+  try {
+    const sRes = await fetch(`${SUPABASE_URL}/rest/v1/plans?select=*&order=created_at.desc`, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+      },
+    });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      if (Array.isArray(sData)) return sData;
+    }
+  } catch (sErr) {
+    console.warn("Could not fetch plans from Supabase REST:", sErr.message);
+  }
+
+  return [];
 }
 
 /**

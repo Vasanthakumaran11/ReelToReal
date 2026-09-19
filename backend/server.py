@@ -13,11 +13,15 @@ from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
+import requests
 from config import VIDEOS_DIR, OUTPUTS_DIR, GEMINI_API_KEY, GEMINI_MODEL
 from database import get_db, init_db, engine, SessionLocal
 import crud
 from pipeline import run_ingestion_pipeline
 from embeddings import generate_embedding
+
+SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,6 +69,17 @@ def health_check(db: Session = Depends(get_db)):
         except Exception:
             pass
 
+    # If direct connection is blocked on campus network, check via Supabase HTTPS REST
+    if not db_connected and SUPABASE_URL and SUPABASE_KEY:
+        try:
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/reels?select=video_id", headers=headers, timeout=5)
+            if r.status_code == 200:
+                reels_count = len(r.json())
+                db_connected = True
+        except Exception:
+            pass
+
     return {
         "status": "online",
         "database_connected": db_connected,
@@ -74,14 +89,32 @@ def health_check(db: Session = Depends(get_db)):
 
 @app.get("/api/reels")
 def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
-    """Returns all ingested reels. Falls back to local outputs/ if DB is not configured."""
+    """Returns all ingested reels. Queries direct PostgreSQL, falls back to Supabase REST, then local outputs/."""
     if db:
         try:
-            return crud.get_all_reels(db, category=category)
+            db_reels = crud.get_all_reels(db, category=category)
+            if db_reels:
+                return db_reels
         except Exception as e:
-            print(f"[Warning] Database query failed, falling back to local files: {e}")
+            print(f"[Warning] Direct DB query failed: {e}")
 
-    # Fallback to local outputs directory
+    # Fallback 1: Supabase REST API over HTTPS port 443 (resilient against campus firewall blocks)
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            params = {"select": "*", "order": "ingested_at.desc"}
+            if category and category.lower() != "all":
+                params["category"] = f"ilike.*{category}*"
+            resp = requests.get(f"{SUPABASE_URL}/rest/v1/reels", headers=headers, params=params, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data:
+                    item["saved"] = True
+                return data
+        except Exception as e:
+            print(f"[Warning] Supabase REST query failed: {e}")
+
+    # Fallback 2: Local outputs directory
     results = []
     if OUTPUTS_DIR.exists():
         for file in OUTPUTS_DIR.glob("*.json"):
@@ -100,9 +133,21 @@ def list_plans(db: Session = Depends(get_db)):
     """Returns all created AI plans."""
     if db:
         try:
-            return crud.get_all_plans(db)
+            plans = crud.get_all_plans(db)
+            if plans:
+                return plans
         except Exception as e:
-            print(f"[Warning] Failed to fetch plans from DB: {e}")
+            print(f"[Warning] Failed to fetch plans from direct DB: {e}")
+
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            resp = requests.get(f"{SUPABASE_URL}/rest/v1/plans?select=*&order=created_at.desc", headers=headers, timeout=5)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+
     return []
 
 @app.post("/api/plan")
