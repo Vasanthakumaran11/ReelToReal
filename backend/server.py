@@ -127,31 +127,47 @@ def health_check(db: Session = Depends(get_db)):
         "gemini_api_key_configured": bool(GEMINI_API_KEY)
     }
 
+COMMON_FRAME_STOPWORDS = {
+    "erode", "salem", "chennai", "india", "tamil", "tamilnadu",
+    "shorts", "short", "reels", "reel", "video", "videos", "part",
+    "near", "best", "food", "shop", "spot", "place", "places", "the", "and"
+}
+
 def _frame_tokens(value: str) -> set[str]:
-    """Extract meaningful ASCII tokens for matching DB names to Unicode frame folders."""
-    return {token for token in re.findall(r"[a-z0-9]{3,}", value.casefold())}
+    """Extract meaningful ASCII tokens for matching DB names to Unicode frame folders, excluding common stopwords."""
+    raw = set(re.findall(r"[a-z0-9]{3,}", value.casefold()))
+    return raw - COMMON_FRAME_STOPWORDS
 
 
 def _with_thumbnail(reel: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach the first generated frame, including when DB text has encoding drift."""
+    """Attach the first generated frame, strictly matching the reel to avoid false positives."""
     if reel.get("thumbnail_url"):
         return reel
 
     video_id = str(reel.get("video_id") or "")
+    if not video_id:
+        return reel
+
     exact_dir = FRAMES_DIR / video_id
     frame_dir = exact_dir if exact_dir.is_dir() else None
 
     if frame_dir is None:
         target_tokens = _frame_tokens(video_id)
-        best_score = 0
-        for candidate in FRAMES_DIR.iterdir():
-            if not candidate.is_dir():
-                continue
-            shared = target_tokens & _frame_tokens(candidate.name)
-            score = sum(len(token) for token in shared)
-            if score > best_score:
-                best_score = score
-                frame_dir = candidate
+        if target_tokens:
+            best_score = 0
+            best_candidate = None
+            for candidate in FRAMES_DIR.iterdir():
+                if not candidate.is_dir():
+                    continue
+                candidate_tokens = _frame_tokens(candidate.name)
+                shared = target_tokens & candidate_tokens
+                # Must share at least 2 distinct distinctive keywords or have high Jaccard similarity
+                jaccard = len(shared) / max(len(target_tokens | candidate_tokens), 1)
+                score = sum(len(token) for token in shared)
+                if (len(shared) >= 2 or jaccard >= 0.4) and score > best_score:
+                    best_score = score
+                    best_candidate = candidate
+            frame_dir = best_candidate
 
     if frame_dir:
         first_frame = next(iter(sorted(frame_dir.glob("frame_*.jpg"))), None)
