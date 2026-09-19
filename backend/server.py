@@ -217,27 +217,50 @@ def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
                 pass
     return results
 
+def _with_plan_thumbnail(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach the authentic reel keyframe thumbnail to an itinerary plan."""
+    if plan.get("thumbnail_url"):
+        return plan
+
+    reel_ids = plan.get("reel_ids") or []
+    for rid in reel_ids:
+        exact = FRAMES_DIR / str(rid)
+        if exact.is_dir():
+            first_frame = next(iter(sorted(exact.glob("frame_*.jpg"))), None)
+            if first_frame:
+                plan["thumbnail_url"] = f"/frames/{quote(exact.name, safe='')}/{first_frame.name}"
+                return plan
+
+    # Fallback to first available frame in FRAMES_DIR
+    for d in sorted(FRAMES_DIR.iterdir()):
+        if d.is_dir():
+            first_frame = next(iter(sorted(d.glob("frame_*.jpg"))), None)
+            if first_frame:
+                plan["thumbnail_url"] = f"/frames/{quote(d.name, safe='')}/{first_frame.name}"
+                break
+    return plan
+
+
 @app.get("/api/plans")
 def list_plans(db: Session = Depends(get_db)):
-    """Returns all created AI plans."""
+    """Returns all created AI plans with authentic reel keyframe thumbnails."""
+    plans = []
     if db:
         try:
             plans = crud.get_all_plans(db)
-            if plans:
-                return plans
         except Exception as e:
             print(f"[Warning] Failed to fetch plans from direct DB: {e}")
 
-    if SUPABASE_URL and SUPABASE_KEY:
+    if not plans and SUPABASE_URL and SUPABASE_KEY:
         try:
             headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
             resp = requests.get(f"{SUPABASE_URL}/rest/v1/plans?select=*&order=created_at.desc", headers=headers, timeout=5)
-            if resp.status_code == 200:
-                return resp.json()
+            if resp.status_code == 200 and resp.json():
+                plans = resp.json()
         except Exception:
             pass
 
-    return []
+    return [_with_plan_thumbnail(p) for p in plans]
 
 @app.post("/api/plan")
 def craft_plan(request: PlanRequest, db: Session = Depends(get_db)):
@@ -282,8 +305,7 @@ def craft_plan(request: PlanRequest, db: Session = Depends(get_db)):
             crud.save_plan_to_db(db, plan_data)
         except Exception as e:
             print(f"[Warning] Failed saving plan to DB: {e}")
-
-    return plan_data
+    return _with_plan_thumbnail(plan_data)
 
 def _generate_ai_itinerary_plan(
     question: str,

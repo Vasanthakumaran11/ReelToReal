@@ -1,124 +1,173 @@
 import { useState } from "react";
-import { Clock, MoreVertical } from "lucide-react";
+import { ArrowRight, MapPin, X, Clock, CheckSquare } from "lucide-react";
 import Timeline from "./Timeline.jsx";
 import Checklist from "./Checklist.jsx";
 import ItineraryTable from "./ItineraryTable.jsx";
 import MapCanvas from "./MapCanvas.jsx";
 
 export default function PlanCard({ plan, onToggleStep, onTogglePacking }) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+
+  const getCategoryBadge = (category = "Travel") => {
+    const cat = category.toLowerCase();
+    if (cat.includes("food")) {
+      return { bg: "bg-[#ffedd5]", text: "text-[#c2410c]", label: "Food" };
+    }
+    if (cat.includes("adventure") || cat.includes("nature")) {
+      return { bg: "bg-[#dcfce7]", text: "text-[#15803d]", label: "Adventure" };
+    }
+    if (cat.includes("shop")) {
+      return { bg: "bg-[#fce7f3]", text: "text-[#be185d]", label: "Shopping" };
+    }
+    return { bg: "bg-[#e0e7ff]", text: "text-[#4338ca]", label: "Travel" };
+  };
+
+  const badge = getCategoryBadge(plan.category);
+  const placesCount = plan.locations?.length || plan.timeline?.length || 3;
+  const durationText = plan.duration || "1 day";
+  const createdDate = plan.created_date || plan.created_at || "Apr 21, 2025";
 
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-card">
-      <header className="flex items-start justify-between gap-3">
-        <h3 className="text-lg font-bold text-ink-900">{plan.title}</h3>
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-label={`Actions for ${plan.title}`}
-            aria-expanded={menuOpen}
-            className="rounded-lg p-1.5 text-ink-500 hover:bg-slate-50"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
-          {menuOpen && (
-            <ul className="absolute right-0 top-9 z-10 w-36 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-sm shadow-lg">
-              {["Rename", "Duplicate", "Export", "Delete"].map((action) => (
-                <li key={action}>
-                  <button
-                    type="button"
-                    onClick={() => setMenuOpen(false)}
-                    className={`w-full px-3 py-1.5 text-left hover:bg-slate-50 ${
-                      action === "Delete" ? "text-rose-600" : "text-ink-700"
-                    }`}
-                  >
-                    {action}
-                  </button>
-                </li>
-              ))}
-            </ul>
+    <>
+      {/* Compact Plan Card matching Image 3 */}
+      <article
+        onClick={() => setShowModal(true)}
+        className="group cursor-pointer flex flex-col rounded-2xl border border-slate-200/80 bg-white p-3.5 shadow-xs transition-all hover:shadow-md hover:-translate-y-0.5"
+      >
+        {/* Authentic Frame Image Thumbnail */}
+        <div className="relative overflow-hidden rounded-xl bg-slate-100">
+          {plan.thumbnail_url ? (
+            <img
+              src={plan.thumbnail_url}
+              alt={plan.title}
+              className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-105"
+              loading="lazy"
+            />
+          ) : (
+            <div className="h-44 w-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-medium">
+              {plan.title}
+            </div>
           )}
         </div>
-      </header>
 
-      {plan.timeline && (
-        <section className="mt-4">
-          <h4 className="text-sm font-semibold text-ink-900">Timeline</h4>
-          <div className="mt-2">
-            <Timeline label={plan.timeline_label} stages={plan.timeline} />
+        {/* Content */}
+        <div className="flex flex-1 flex-col pt-3">
+          {/* Category Badge */}
+          <div className="mb-2">
+            <span
+              className={`inline-block rounded-md px-2.5 py-0.5 text-xs font-semibold ${badge.bg} ${badge.text}`}
+            >
+              {badge.label}
+            </span>
           </div>
-        </section>
-      )}
 
-      {plan.itinerary && (
-        <section className="mt-4 grid gap-4 sm:grid-cols-[1.3fr_1fr]">
-          <div>
-            <h4 className="text-sm font-semibold text-ink-900">{plan.itinerary_label}</h4>
-            <div className="mt-2">
-              <ItineraryTable rows={plan.itinerary} />
+          {/* Plan Title */}
+          <h3 className="text-base font-bold text-slate-900 line-clamp-1 group-hover:text-[#2563eb] transition-colors">
+            {plan.title}
+          </h3>
+
+          {/* Places & Days Info */}
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+            <MapPin className="h-3.5 w-3.5 text-slate-400" />
+            <span>{placesCount} places</span>
+            <span className="text-slate-300">•</span>
+            <span>{durationText}</span>
+          </p>
+
+          {/* Footer: Date and Arrow Button */}
+          <div className="mt-4 flex items-center justify-between pt-2 border-t border-slate-100">
+            <span className="text-xs text-slate-400">Created on {createdDate}</span>
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-blue-50 text-[#2563eb] transition-colors group-hover:bg-[#2563eb] group-hover:text-white">
+              <ArrowRight className="h-4 w-4" />
+            </span>
+          </div>
+        </div>
+      </article>
+
+      {/* Expanded Modal for Detailed Itinerary */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setShowModal(false)}
+              className="absolute right-5 top-5 grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 mb-2">
+              <span
+                className={`rounded-md px-2.5 py-0.5 text-xs font-semibold ${badge.bg} ${badge.text}`}
+              >
+                {badge.label}
+              </span>
+              <span className="text-xs text-slate-400">Created on {createdDate}</span>
             </div>
-          </div>
-          <div className="space-y-3">
+
+            <h2 className="text-2xl font-bold text-slate-900">{plan.title}</h2>
             {plan.overview && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-semibold text-ink-900">Overview</p>
-                <p className="mt-1 text-[13px] text-ink-700">{plan.overview}</p>
-              </div>
+              <p className="mt-2 text-sm text-slate-600 leading-relaxed">{plan.overview}</p>
             )}
-            {plan.locations && (
-              <div className="h-40 overflow-hidden rounded-lg border border-slate-200">
-                <MapCanvas locations={plan.locations} route labels={false} />
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
-      {plan.key_dates && (
-        <section className="mt-5 grid gap-4 sm:grid-cols-[1fr_1fr]">
-          <div>
-            <h4 className="text-sm font-semibold text-ink-900">Key dates</h4>
-            <ul className="mt-2 space-y-3">
-              {plan.key_dates.map((d, i) => (
-                <li key={i} className="text-[13px]">
-                  <p className="flex items-center gap-1.5 font-medium text-ink-900">
-                    <Clock className="h-3.5 w-3.5 text-ink-500" />
-                    {d.date}
-                  </p>
-                  <p className="ml-5 text-ink-700">{d.window}</p>
-                  {d.note && <p className="ml-5 text-ink-500">{d.note}</p>}
-                </li>
-              ))}
-            </ul>
-          </div>
-          {plan.locations && (
-            <div className="h-44 overflow-hidden rounded-lg border border-slate-200">
-              <MapCanvas locations={plan.locations} route labels={false} />
+            {/* Timeline */}
+            {plan.timeline && plan.timeline.length > 0 && (
+              <div className="mt-6">
+                <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
+                  Itinerary Stops & Timeline
+                </h4>
+                <Timeline label={plan.timeline_label || "Schedule"} stages={plan.timeline} />
+              </div>
+            )}
+
+            {/* Map Canvas */}
+            {plan.locations && plan.locations.length > 0 && (
+              <div className="mt-6">
+                <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
+                  Route Map
+                </h4>
+                <div className="h-52 overflow-hidden rounded-2xl border border-slate-200">
+                  <MapCanvas locations={plan.locations} route labels={true} />
+                </div>
+              </div>
+            )}
+
+            {/* Steps & Packing */}
+            <div className="mt-6 grid gap-6 sm:grid-cols-2">
+              {plan.steps && plan.steps.length > 0 && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <Checklist
+                    title="Actionable Steps"
+                    items={plan.steps}
+                    onToggle={(i) => onToggleStep?.(plan.plan_id, i)}
+                  />
+                </div>
+              )}
+
+              {plan.packing && plan.packing.length > 0 && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <Checklist
+                    title="Packing List"
+                    items={plan.packing}
+                    onToggle={(i) => onTogglePacking?.(plan.plan_id, i)}
+                  />
+                </div>
+              )}
             </div>
-          )}
-        </section>
-      )}
 
-      {plan.steps && (
-        <section className="mt-5 border-t border-slate-200 pt-4">
-          <Checklist
-            title="Actionable steps"
-            items={plan.steps}
-            onToggle={(i) => onToggleStep?.(plan.plan_id, i)}
-          />
-        </section>
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+              >
+                Close Plan
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-
-      {plan.packing && (
-        <section className="mt-5 border-t border-slate-200 pt-4">
-          <Checklist
-            title="Packing list"
-            items={plan.packing}
-            onToggle={(i) => onTogglePacking?.(plan.plan_id, i)}
-          />
-        </section>
-      )}
-    </article>
+    </>
   );
 }

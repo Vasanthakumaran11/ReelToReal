@@ -68,15 +68,22 @@ export default function App() {
     }
   }, []);
 
+  const getCanvasBg = () => {
+    if (tab === "saved") return "bg-[#faf5f0]";
+    if (tab === "settings") return "bg-[#edf7f2]";
+    if (tab === "plans") return "bg-[#f0f9ff]/40";
+    return "bg-[#f8fafc]";
+  };
+
   return (
-    <div className="min-h-screen bg-white">
+    <div className={`min-h-screen transition-colors duration-200 ${getCanvasBg()}`}>
       <Header active={tab} onChange={setTab} />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
         {error && (
           <p
             role="alert"
-            className="mb-6 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"
+            className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"
           >
             {error}
           </p>
@@ -94,6 +101,9 @@ export default function App() {
         {tab === "plans" && (
           <Plans
             plans={plans}
+            reels={reels}
+            crafting={crafting}
+            onCraft={handleCraft}
             onStart={() => setTab("explore")}
             onToggleStep={toggleChecklist("steps")}
             onTogglePacking={toggleChecklist("packing")}
