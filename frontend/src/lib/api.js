@@ -4,6 +4,17 @@
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "";
 
+export async function askReelToReal(query, history = []) {
+  const res = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, history }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 /**
  * Fetch all processed reels from the backend API.
  */

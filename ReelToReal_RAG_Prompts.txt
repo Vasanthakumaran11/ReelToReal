@@ -1,0 +1,487 @@
+=====================================================================
+REELTOREAL RAG SYSTEM - STAGE-BY-STAGE COPILOT PROMPTS
+=====================================================================
+
+Pipeline:
+  JSON -> clean document -> Gemini Embedding 2 -> pgvector
+  Query -> embedding -> pgvector -> Top-K Reels -> Gemini 2.5 Flash
+        -> FastAPI /api/chat -> React UI
+
+How to use this file:
+  1. Paste the GLOBAL RULES block at the start of every new Copilot session.
+  2. Give Copilot ONE stage prompt at a time.
+  3. Do not move to the next stage until the "Done when" check passes.
+  4. If Copilot's plan does not match your real schema, correct the plan
+     BEFORE it writes code.
+
+Stage order:
+  Global rules
+  Stage 1    JSON loader + DB matching
+  Stage 2    Gemini embeddings into pgvector
+  Stage 3    Retriever (with CLI)
+  Checkpoint Manual retrieval testing (run queries, check results)
+  Stage 3.5  Evaluation set
+  Stage 4    Generation with Gemini 2.5 Flash
+  Stage 5    FastAPI endpoint
+  Stage 6    Frontend
+
+
+=====================================================================
+GLOBAL RULES (paste first, every session)
+=====================================================================
+
+I am building the ReelToReal RAG system.
+
+Existing project facts:
+- Python backend with an ingestion pipeline
+- A data/ folder with JSON files (one per Reel)
+- PostgreSQL already connected, with Reel metadata stored
+- pgvector already installed
+- React + Tailwind frontend in the frontend/ folder
+
+Global rules:
+- Do NOT create another database or a second vector store.
+- Do NOT rewrite or break existing files. Prefer adding new modules.
+- Before writing any code, inspect the project and show me a short plan
+  with the files you will create or modify. Wait for my OK.
+- Use environment variables from .env (GEMINI_API_KEY, DATABASE_URL, etc.).
+  Never hardcode secrets and never log them.
+- Use the official google-genai Python SDK.
+- Add logging, error handling, and type hints.
+- Write tests for every stage.
+- At the end, list every file you created or modified and how to run it.
+
+
+=====================================================================
+STAGE 1 - CONNECT JSON WITH THE EXISTING DB
+=====================================================================
+
+Stage 1: JSON loader. Do not implement embeddings, vector search or the
+LLM yet.
+
+First inspect the project structure, the existing PostgreSQL schema, and a
+sample of the JSON files in data/. Show me:
+- the Reel table columns
+- the JSON structure (and any variations between files)
+- how a JSON file maps to a Reel row (which field is the join key)
+
+Then create a JSON loader that:
+1. Reads all JSON files from data/.
+2. Validates each file with Pydantic models. Invalid files are logged and
+   skipped, and they must not stop the run.
+3. Extracts the useful Reel information: title, description/caption,
+   transcript, places/restaurants, category, city, price, source URL,
+   tags, and anything else present.
+4. Matches each JSON record to the existing Reel row in PostgreSQL.
+   Report unmatched JSON files and unmatched DB rows separately.
+5. Does not duplicate existing metadata. Only fill missing fields. Never
+   overwrite existing values unless I pass --overwrite.
+6. Normalizes price into numeric columns (min_price / max_price in INR)
+   in addition to any original text. Propose the migration first.
+7. Builds a clean textual document for each Reel, formatted like:
+     Title: ...
+     Category: ...
+     City: ...
+     Places: ...
+     Price: ...
+     Summary: ...
+     Transcript/Details: ...
+   Skip empty fields.
+8. If a Reel mentions multiple distinct places or items, also produce one
+   sub-document per place. Look at the real data first, tell me whether
+   this applies, and propose a reel_chunks table (reel_id, chunk_index,
+   text, place, city, category, price) before creating it.
+9. Computes a SHA-256 content_hash of each document so later stages can
+   detect changes.
+
+Support a --dry-run flag that prints what would change without writing.
+
+Done when: I can run the loader with --dry-run, then for real, and see a
+summary: files read, valid, invalid, matched, unmatched, updated, skipped.
+Running it twice creates no duplicates.
+
+
+=====================================================================
+STAGE 2 - GEMINI EMBEDDINGS INTO PGVECTOR
+=====================================================================
+
+Stage 2: Embedding generation. Input is the clean documents (and chunks,
+if we created them) from Stage 1.
+
+Requirements:
+1. Use the model gemini-embedding-2 via the Gemini API (google-genai SDK).
+2. Check the dimension of the EXISTING pgvector column. gemini-embedding-2
+   returns 3072 dimensions by default and supports output_dimensionality.
+   Pick a dimension that matches the column. If no column exists yet or it
+   is mismatched, propose 1536 and show me the migration before running
+   it. Note that pgvector HNSW/IVFFlat indexes on the plain vector type
+   are limited to 2000 dimensions. If we keep 3072, use halfvec or no
+   index. With a small dataset an exact scan is fine, so do not add an
+   index unless it is needed.
+3. Check the official docs for how gemini-embedding-2 expects task
+   instructions for documents versus queries. Apply the document-side
+   format here and put the query-side format in one shared helper so
+   Stage 3 uses exactly the same one.
+4. Do not create any other vector database.
+5. Skip a Reel (or chunk) if it already has an embedding AND its stored
+   content_hash matches the current document hash. Re-embed if the hash
+   changed. --force re-embeds everything.
+6. Store the model name, dimension and content_hash next to each embedding
+   so we can detect a model change later.
+7. Never mix embeddings from different models or dimensions in the same
+   column. If they differ, stop and tell me.
+8. Batch requests where the API allows, and add retries with exponential
+   backoff for rate limits (429) and transient errors. One failed Reel
+   must not stop the run. Log it and continue.
+9. Read GEMINI_API_KEY from .env. Add proper logging.
+
+Create:
+- a reusable EmbeddingService class (embed_documents, embed_query)
+- an indexing script: python backend/index_embeddings.py [--force] [--limit N]
+
+Expected console output:
+  [1/40] Reel <id>: generating embedding... saving... done
+  [2/40] Reel <id>: unchanged, skipped
+  ...
+  Summary: embedded 12, skipped 27, failed 1
+
+Done when: the first run embeds everything, a second run skips everything,
+and editing one JSON file re-embeds only that Reel.
+
+
+=====================================================================
+STAGE 3 - BUILD THE RETRIEVER
+=====================================================================
+
+Stage 3: Retrieval layer. Do not implement the LLM answer yet.
+
+Build a Retriever service:
+
+  retrieve(query: str, top_k: int = 5, filters: dict | None = None,
+           chat_history: list | None = None) -> RetrievalResult
+
+Flow:
+  User query
+  -> (optional) query understanding
+  -> gemini-embedding-2 query vector
+  -> PostgreSQL + pgvector cosine search
+  -> Top-K Reels
+
+Requirements:
+1. Query understanding step: use Gemini 2.5 Flash with structured JSON
+   output to convert the user's query into:
+     {
+       "search_text": "...",
+       "filters": {"category": ..., "city": ..., "place": ..., "max_price": ...},
+       "sub_queries": ["...", "..."]
+     }
+   sub_queries is only for planning requests that need several kinds of
+   places (for example "plan my evening with Chinese dinner" becomes
+   dinner, dessert, activity). Retrieve for each sub-query, then merge
+   and deduplicate. If chat_history is given, rewrite follow-up questions
+   ("something cheaper?") into standalone queries.
+2. Embed the query with the SAME query-side helper as Stage 2.
+3. Cosine search using pgvector's <=> operator. Note that <=> returns
+   distance, so similarity = 1 - distance. Return the similarity.
+4. Filters (category, city, place, price) are SOFT: apply them first, and
+   if that returns fewer than 2 results, retry without them and mark
+   filters_relaxed=true in the result.
+5. Add lightweight keyword matching (Postgres full-text search or
+   pg_trgm) on title/place names and combine it with the vector results
+   (for example reciprocal rank fusion), so exact place names are found.
+6. If we created reel_chunks, search the chunks and group results back to
+   their parent Reel.
+7. Return for each result: reel_id, title, source_url, places, category,
+   city, price, the matched text, similarity score, and the retrieval
+   method (vector, keyword, or both). Also return the applied filters,
+   the sub-queries used, the rewritten query, and any warnings.
+8. Add a minimum-similarity threshold from config (default to be tuned).
+   Results below it are dropped. If nothing remains, return an empty
+   result with reason="insufficient_context".
+9. Retrieve ONLY from PostgreSQL. No external knowledge source.
+10. Add a CLI for testing:
+      python backend/retrieve_cli.py "plan my evening with Chinese food"
+    Support optional flags: --top-k, --no-filters, --history "..."
+    For every result it must print: rank, reel_id, title, similarity,
+    retrieval method, category, city, price. Above the results it must
+    print: the rewritten query, the extracted filters, filters_relaxed,
+    and any sub-queries. This debug output is what I will use in the
+    manual retrieval testing checkpoint.
+
+Done when: the CLI returns sensible Reels with scores, an unrelated query
+(for example "how to fix a car engine") returns insufficient_context, and
+tests cover filter relaxation and the threshold.
+
+
+=====================================================================
+CHECKPOINT - MANUAL RETRIEVAL TESTING (do this BEFORE Stage 4)
+=====================================================================
+
+This is for YOU to do, not a Copilot prompt. Retrieval is created in
+Stage 3, so run these after Stage 3 and before building the LLM. If
+retrieval is wrong, no prompt will fix the answers.
+
+Pick 5-6 real Reels from your DB and write queries based on what they
+actually contain. Then run each type below with:
+  python backend/retrieve_cli.py "your query"
+
+QUERY TYPES TO RUN
+
+1. Exact place name
+   Example: "Dragon House"
+   Pass: that Reel is #1. If not, keyword matching is broken.
+
+2. Semantic paraphrase
+   Example: "place for noodles and fried rice" (Reel says "Chinese
+   restaurant")
+   Pass: the Chinese Reel appears even with no shared words.
+
+3. Category only
+   Examples: "Chinese food", "cafes", "things to do"
+   Pass: results are mostly that category.
+
+4. City filter
+   Example: "Chinese food in Coimbatore"
+   Pass: only Coimbatore Reels, and filters_applied shows the city.
+
+5. Price filter
+   Examples: "dinner under 500", "cheap biryani"
+   Pass: results respect the price. Check that price parsing works.
+
+6. Combined filters
+   Example: "cheap Chinese dinner in Coimbatore"
+   Pass: category, city and price are all extracted correctly.
+
+7. Filter that matches nothing
+   Example: "Chinese food" in a city you have no Reels for
+   Pass: filters_relaxed=true and still sensible results, not an empty
+   list.
+
+8. Planning (multi-intent)
+   Example: "Plan my evening with a Chinese dinner"
+   Pass: sub-queries fire, and results include dinner plus other kinds
+   of places, not five dinner Reels.
+
+9. Vague query
+   Example: "somewhere fun this weekend"
+   Pass: broad but plausible results, with lower scores than specific
+   queries.
+
+10. Follow-up with history
+    Example: first "Chinese food", then "something cheaper" using
+    --history
+    Pass: the rewritten query stands alone and keeps the Chinese context.
+
+11. Misspelled or mixed-language
+    Examples: "chinees resturant", or a query in the language your Reels
+    use
+    Pass: still finds the right Reels. Embeddings usually handle this,
+    keyword search will not.
+
+12. Out of domain (negative)
+    Examples: "how to fix a car engine", "who won the World Cup"
+    Pass: returns insufficient_context and no results.
+
+13. Near-miss negative
+    Example: a cuisine or place type you never saved
+    Pass: low scores or empty, not confident wrong matches.
+
+WHAT TO RECORD FOR EACH RUN
+- Is the right Reel in the top 5? Note the rank.
+- What are the scores for good matches versus bad ones? The gap between
+  them is how you set the similarity threshold. For example, if good
+  matches score 0.65-0.85 and junk scores 0.30-0.50, set the threshold
+  around 0.55.
+- Was it found by vector search, keyword search, or both?
+- Did the filters extract what you expected?
+
+RED FLAGS - STOP AND FIX BEFORE STAGE 4
+- Exact place names do not rank first.
+- Out-of-domain queries return results above the threshold.
+- Every score is nearly identical. This points to a bad document format
+  or a mismatched query/document embedding setup.
+- City or price filters silently return wrong Reels.
+- The planning query returns only one kind of place.
+
+When these behave, save your 15-20 best queries with their expected Reel
+IDs. They become the evaluation set in Stage 3.5.
+
+
+=====================================================================
+STAGE 3.5 - EVALUATION SET
+=====================================================================
+
+Create a small retrieval evaluation harness.
+
+1. Create eval/queries.json with 15-20 realistic queries and, for each,
+   the reel_ids that should appear in the top 5. Start from the queries
+   I tested manually (I will give you the list and expected Reels) and
+   draft additional ones from the real data in the DB. Let me review and
+   correct them. Include:
+   - exact place names
+   - simple category queries ("Chinese restaurant")
+   - queries with a city or price ("cheap biryani under 300")
+   - planning queries
+   - follow-up queries with history
+   - queries with no answer in the data (expected: insufficient_context)
+2. Create python backend/eval_retrieval.py which runs every query through
+   the Retriever and prints:
+   - recall@5 overall
+   - the missed Reels per query
+   - the similarity scores
+   - the queries that wrongly returned results when none were expected
+3. Use it to help me tune the similarity threshold. Print the score
+   distribution for expected matches versus expected non-matches and
+   suggest a threshold.
+
+Done when: I can rerun one command after any change (document format,
+dimensions, filters, threshold) and see the score.
+
+
+=====================================================================
+STAGE 4 - GENERATION WITH GEMINI 2.5 FLASH
+=====================================================================
+
+Stage 4: Generation. Use the Retriever from Stage 3.
+
+Create a reusable GeneratorService:
+
+  answer(query: str, retrieval: RetrievalResult, chat_history=None) -> Answer
+
+1. Use Gemini 2.5 Flash (gemini-2.5-flash) via google-genai.
+2. The LLM receives: the user's question, the retrieved Reel context
+   (title, places, category, city, price, matched text), and each Reel's
+   reel_id and source_url. Never send similarity scores or anything about
+   embeddings or vectors.
+3. If retrieval.reason == "insufficient_context" or there are no
+   results, do NOT call the LLM. Return a fixed message saying the saved
+   Reels do not contain enough information.
+4. System instructions:
+   - Answer using only the retrieved user-saved Reel information.
+   - Never invent restaurants, places, products, prices, activities or
+     facts.
+   - If the retrieved information is insufficient for part of the
+     request, say so explicitly for that part.
+   - Prefer the retrieved Reels over general knowledge.
+   - Every recommendation must cite the source reel_id.
+   - For planning requests, create a concrete ordered plan (times, order,
+     what to do at each stop) using only the retrieved Reels.
+   - Do not mention embeddings, vectors, or retrieval internals.
+5. Use structured JSON output (response schema) like:
+     {
+       "answer": "short conversational summary",
+       "items": [
+         {"name": "...", "city": "...", "price": "...", "note": "...",
+          "reel_id": "..."}
+       ],
+       "insufficient_info": false
+     }
+6. Validate the output. Every reel_id in items must exist in the
+   retrieved set. Drop or flag any that do not. If JSON parsing fails,
+   retry once, then fall back gracefully.
+7. Set a low temperature, a timeout, and retries for transient errors.
+8. Put prompts in a separate prompts.py file so they are easy to edit.
+
+Add a CLI:
+  python backend/ask_cli.py "Plan my evening with a Chinese dinner"
+
+Done when: answers cite valid reel_ids, never mention places that are not
+in the retrieved Reels, and the "no info" queries from the eval set
+produce the fixed insufficient-info response.
+
+
+=====================================================================
+STAGE 5 - FASTAPI ENDPOINT
+=====================================================================
+
+Stage 5: FastAPI endpoint.
+
+Create POST /api/chat.
+
+Request (Pydantic):
+  {
+    "query": "Plan my evening with a Chinese dinner",
+    "history": [{"role": "user" | "assistant", "content": "..."}]   // optional
+  }
+
+Flow: query understanding -> query embedding -> pgvector retrieval
+(soft filters) -> context -> Gemini 2.5 Flash -> validated answer.
+
+Response (Pydantic):
+  {
+    "answer": "...",
+    "items": [
+      {"name": "...", "city": "...", "price": "...", "note": "...", "reel_id": "..."}
+    ],
+    "sources": [
+      {"reel_id": "...", "title": "...", "source_url": "...", "similarity": 0.91}
+    ],
+    "insufficient_info": false,
+    "filters_applied": {"city": "...", "category": "..."},
+    "filters_relaxed": false
+  }
+
+Requirements:
+1. Validate input: non-empty query, a maximum length, and a maximum
+   history length.
+2. Reuse the Retriever and GeneratorService. Do not duplicate logic in the
+   route.
+3. Use FastAPI dependency injection for the DB session and services.
+4. Configure CORS for the React dev origin (from an env variable).
+5. Return clear errors: 400 for invalid input, 502 or 503 if Gemini fails,
+   500 for unexpected errors. Never leak the API key or stack traces.
+6. Log query, latency per step (understanding, embedding, retrieval,
+   generation), and result counts. Do not log secrets.
+7. Add GET /api/health.
+8. Add a simple rate limit per IP.
+9. Write tests with the Gemini calls mocked.
+
+Done when: curl POST /api/chat returns the JSON above, and /docs shows the
+schema.
+
+
+=====================================================================
+STAGE 6 - CONNECT THE FRONTEND
+=====================================================================
+
+Stage 6: Connect the existing React + Tailwind frontend (frontend/ folder).
+
+Do not redesign existing pages. Reuse the existing components and styling.
+Show me the plan and the files you will touch first.
+
+Requirements:
+1. Add an "Ask ReelToReal" chat page/component (or wire the existing one)
+   with an input box and an Ask button.
+2. Add an API client that calls POST /api/chat. The base URL comes from an
+   env variable (for example VITE_API_URL).
+3. Keep chat history in state and send it as "history" so follow-up
+   questions work.
+4. Show states: loading (skeleton or "Thinking..."), error with a retry
+   button, and an empty/insufficient_info state with a friendly message.
+5. Render the answer text, then a card for each item in items:
+     name, city, price, note, and a "View Reel" link that opens
+     source_url in a new tab (rel="noopener noreferrer").
+   Match each item to its source by reel_id.
+6. Do not display raw similarity scores to the end user.
+7. Disable the Ask button while a request is in flight and handle empty
+   input.
+8. Make it responsive on mobile.
+
+Done when: I can type "Plan my evening with Chinese food" and see the AI
+answer, the place cards, and working View Reel links, and a nonsense query
+shows the friendly "not enough info in your saved Reels" message.
+
+
+=====================================================================
+FINAL END-TO-END CHECK
+=====================================================================
+
+[ ] Stage 1: loader runs twice with no duplicates
+[ ] Stage 2: second index run skips everything; edited JSON re-embeds
+[ ] Stage 3: CLI returns scored, sensible results
+[ ] Checkpoint: all 13 query types behave, no red flags
+[ ] Stage 3.5: eval script gives an acceptable recall@5 and a tuned
+    threshold
+[ ] Stage 4: answers cite only retrieved reel_ids
+[ ] Stage 5: /api/chat returns the correct JSON; errors are clean
+[ ] Stage 6: UI shows answer, cards, and working View Reel links

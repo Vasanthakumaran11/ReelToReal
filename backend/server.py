@@ -22,22 +22,32 @@ from database import get_db, init_db, engine, SessionLocal
 import crud
 from pipeline import run_ingestion_pipeline
 from embeddings import generate_embedding
+from rag_models import ChatRequest, ChatResponse
+from retriever import retrieve
+from generator import answer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB tables and pgvector extension if DATABASE_URL is configured
+    # Do not block API startup on a remote database or pgvector extension check.
     if engine:
-        print("[Startup] Initializing database and pgvector extension...")
+        asyncio.create_task(_initialize_database())
+    yield
+
+
+async def _initialize_database():
+    print("[Startup] Initializing database and pgvector extension in background...")
+    try:
+        success = await asyncio.wait_for(asyncio.to_thread(init_db), timeout=8)
+    except asyncio.TimeoutError:
+        print("[Warning] Database initialization timed out; local API remains available.")
+        return
+    if success and SessionLocal:
         try:
-            success = await asyncio.wait_for(asyncio.to_thread(init_db), timeout=8)
-        except asyncio.TimeoutError:
-            print("[Warning] Database initialization timed out; continuing in local fallback mode.")
-            success = False
-        if success and SessionLocal:
             with SessionLocal() as db:
                 synced = crud.sync_local_outputs_to_db(db)
                 print(f"[Startup] Synced {synced} local reels into PostgreSQL.")
-    yield
+        except Exception as exc:
+            print(f"[Warning] Database sync failed: {exc}")
 
 app = FastAPI(
     title="ReelToReal Ingestion & Planning API",
@@ -62,6 +72,26 @@ class PlanRequest(BaseModel):
 
 class IngestUrlRequest(BaseModel):
     source_url: str
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    """Retrieve saved Reels and answer only from that retrieved context."""
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    if not db:
+        return ChatResponse(
+            answer="Your saved Reels are not available from the database right now.",
+            insufficient_info=True,
+        )
+    try:
+        retrieval = retrieve(db, request.query.strip(), history=request.history)
+        return answer(request.query.strip(), retrieval, request.history)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[Error] RAG chat failed: {exc}")
+        raise HTTPException(status_code=502, detail="RAG service is temporarily unavailable.") from exc
 
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
