@@ -2,38 +2,56 @@ import os
 import json
 import uuid
 import shutil
+import asyncio
+import re
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
 import requests
-from config import VIDEOS_DIR, OUTPUTS_DIR, GEMINI_API_KEY, GEMINI_MODEL
+from config import VIDEOS_DIR, FRAMES_DIR, OUTPUTS_DIR, GEMINI_API_KEY, GEMINI_MODEL
 from database import get_db, init_db, engine, SessionLocal
 import crud
 from pipeline import run_ingestion_pipeline
 from embeddings import generate_embedding
+from rag_models import ChatRequest, ChatResponse
+from retriever import retrieve
+from generator import answer
 
 SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB tables and pgvector extension if DATABASE_URL is configured
+    # Do not block API startup on a remote database or pgvector extension check.
     if engine:
-        print("[Startup] Initializing database and pgvector extension...")
-        success = init_db()
-        if success and SessionLocal:
+        asyncio.create_task(_initialize_database())
+    yield
+
+
+async def _initialize_database():
+    print("[Startup] Initializing database and pgvector extension in background...")
+    try:
+        success = await asyncio.wait_for(asyncio.to_thread(init_db), timeout=8)
+    except asyncio.TimeoutError:
+        print("[Warning] Database initialization timed out; local API remains available.")
+        return
+    if success and SessionLocal:
+        try:
             with SessionLocal() as db:
                 synced = crud.sync_local_outputs_to_db(db)
                 print(f"[Startup] Synced {synced} local reels into PostgreSQL.")
-    yield
+        except Exception as exc:
+            print(f"[Warning] Database sync failed: {exc}")
 
 app = FastAPI(
     title="ReelToReal Ingestion & Planning API",
@@ -41,6 +59,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
 
 # Enable CORS for Vite frontend
 app.add_middleware(
@@ -56,6 +76,26 @@ class PlanRequest(BaseModel):
 
 class IngestUrlRequest(BaseModel):
     source_url: str
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    """Retrieve saved Reels and answer only from that retrieved context."""
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    if not db:
+        return ChatResponse(
+            answer="Your saved Reels are not available from the database right now.",
+            insufficient_info=True,
+        )
+    try:
+        retrieval = retrieve(db, request.query.strip(), history=request.history)
+        return answer(request.query.strip(), retrieval, request.history)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[Error] RAG chat failed: {exc}")
+        raise HTTPException(status_code=502, detail="RAG service is temporarily unavailable.") from exc
 
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
@@ -87,6 +127,39 @@ def health_check(db: Session = Depends(get_db)):
         "gemini_api_key_configured": bool(GEMINI_API_KEY)
     }
 
+def _frame_tokens(value: str) -> set[str]:
+    """Extract meaningful ASCII tokens for matching DB names to Unicode frame folders."""
+    return {token for token in re.findall(r"[a-z0-9]{3,}", value.casefold())}
+
+
+def _with_thumbnail(reel: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach the first generated frame, including when DB text has encoding drift."""
+    if reel.get("thumbnail_url"):
+        return reel
+
+    video_id = str(reel.get("video_id") or "")
+    exact_dir = FRAMES_DIR / video_id
+    frame_dir = exact_dir if exact_dir.is_dir() else None
+
+    if frame_dir is None:
+        target_tokens = _frame_tokens(video_id)
+        best_score = 0
+        for candidate in FRAMES_DIR.iterdir():
+            if not candidate.is_dir():
+                continue
+            shared = target_tokens & _frame_tokens(candidate.name)
+            score = sum(len(token) for token in shared)
+            if score > best_score:
+                best_score = score
+                frame_dir = candidate
+
+    if frame_dir:
+        first_frame = next(iter(sorted(frame_dir.glob("frame_*.jpg"))), None)
+        if first_frame:
+            reel["thumbnail_url"] = f"/frames/{quote(frame_dir.name, safe='')}/{first_frame.name}"
+    return reel
+
+
 @app.get("/api/reels")
 def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
     """Returns all ingested reels. Queries direct PostgreSQL, falls back to Supabase REST, then local outputs/."""
@@ -94,7 +167,7 @@ def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
         try:
             db_reels = crud.get_all_reels(db, category=category)
             if db_reels:
-                return db_reels
+                return [_with_thumbnail(reel) for reel in db_reels]
         except Exception as e:
             print(f"[Warning] Direct DB query failed: {e}")
 
@@ -110,7 +183,7 @@ def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
                 data = resp.json()
                 for item in data:
                     item["saved"] = True
-                return data
+                return [_with_thumbnail(item) for item in data]
         except Exception as e:
             print(f"[Warning] Supabase REST query failed: {e}")
 
@@ -123,7 +196,7 @@ def list_reels(category: Optional[str] = None, db: Session = Depends(get_db)):
                     data = json.load(f)
                 if data.get("status") == "success":
                     data["saved"] = True
-                    results.append(data)
+                    results.append(_with_thumbnail(data))
             except Exception:
                 pass
     return results

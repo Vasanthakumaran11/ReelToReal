@@ -5,6 +5,7 @@ import InspirationList from "../components/InspirationList.jsx";
 import ReelCard from "../components/ReelCard.jsx";
 import ReelDetail from "../components/ReelDetail.jsx";
 import MapView from "./MapView.jsx";
+import AskReelToReal from "../components/AskReelToReal.jsx";
 import { ingestFile, ingestUrl } from "../lib/api.js";
 import { inspirationPrompts, mapLayers } from "../data/plans.js";
 
@@ -59,6 +60,10 @@ export default function ExploreAI({ reels = [], onCraft, crafting, onIngested, o
             value={question}
             onValue={setQuestion}
           />
+
+          <div className="mt-6">
+            <AskReelToReal />
+          </div>
 
           <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,260px)_1fr]">
             <InspirationList
