@@ -54,20 +54,25 @@ def build_search_document(record: Dict[str, Any]) -> str:
 
 def generate_embedding(text: str) -> List[float]:
     """
-    Generates a 768-dimensional normalized vector embedding using Gemini API.
+    Generates a 768-dimensional normalized vector embedding using Gemini API,
+    falling back to GEMINI_BACKUP_API_KEY if primary quota is exhausted.
     """
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not configured.")
+    from config import get_gemini_client
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
     config = types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSION)
 
-    res = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=config
-    )
-
-    if res.embeddings and len(res.embeddings) > 0:
-        return res.embeddings[0].values
+    for use_backup in [False, True]:
+        try:
+            client = get_gemini_client(backup=use_backup)
+            res = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=config
+            )
+            if res.embeddings and len(res.embeddings) > 0:
+                return res.embeddings[0].values
+        except Exception as e:
+            if not use_backup:
+                continue
+            raise RuntimeError(f"Failed to generate embedding vector from Gemini: {e}")
     raise RuntimeError("Failed to generate embedding vector from Gemini.")

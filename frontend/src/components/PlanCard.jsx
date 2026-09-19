@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { ArrowRight, MapPin, X, Clock, CheckSquare } from "lucide-react";
+import { ArrowRight, MapPin, X, Navigation } from "lucide-react";
 import Timeline from "./Timeline.jsx";
 import Checklist from "./Checklist.jsx";
-import ItineraryTable from "./ItineraryTable.jsx";
-import MapCanvas from "./MapCanvas.jsx";
+import OpenStreetMap from "./OpenStreetMap.jsx";
+import PlaceDetailCard from "./PlaceDetailCard.jsx";
 
 export default function PlanCard({ plan, onToggleStep, onTogglePacking }) {
   const [showModal, setShowModal] = useState(false);
@@ -121,15 +121,63 @@ export default function PlanCard({ plan, onToggleStep, onTogglePacking }) {
               </div>
             )}
 
-            {/* Map Canvas */}
+            {/* Places To Visit: rich stop-by-stop breakdown with image, key details & map */}
+            {plan.timeline?.some((s) => s.detailed_description || s.key_points?.length) && (
+              <div className="mt-8 space-y-5">
+                <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500">
+                  Places To Visit
+                </h4>
+                {plan.timeline.map((stage, i) => (
+                  <div key={i} className="space-y-2">
+                    {stage.travel_note && i > 0 && (
+                      <div className="flex items-start gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-3.5 py-2.5 text-xs text-slate-600">
+                        <Navigation className="h-3.5 w-3.5 text-[#2563eb] mt-0.5 shrink-0" />
+                        <span>
+                          <span className="font-semibold text-slate-700">Pathway: </span>
+                          {stage.travel_note}
+                        </span>
+                      </div>
+                    )}
+                    <PlaceDetailCard
+                      item={{
+                        name: stage.label,
+                        tagline: stage.tagline,
+                        thumbnail_url: stage.thumbnail_url,
+                        city: stage.city,
+                        location_text: stage.location_text,
+                        best_time_to_visit: stage.best_time_to_visit,
+                        price: stage.price,
+                        category: stage.category,
+                        vibe: stage.vibe,
+                        key_points: stage.key_points,
+                        detailed_description: stage.detailed_description,
+                        note: stage.detail,
+                        latitude: stage.latitude,
+                        longitude: stage.longitude,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Live OpenStreetMap with exact place locations */}
             {plan.locations && plan.locations.length > 0 && (
               <div className="mt-6">
                 <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
                   Route Map
                 </h4>
-                <div className="h-52 overflow-hidden rounded-2xl border border-slate-200">
-                  <MapCanvas locations={plan.locations} route labels={true} />
-                </div>
+                <OpenStreetMap
+                  origin={{ name: "Your Location (Bangalore)", lat: 12.9716, lng: 77.5946 }}
+                  destinations={plan.locations.map((loc) => ({
+                    name: loc.name,
+                    place: loc.name,
+                    city: plan.destination,
+                    lat: loc.lat,
+                    lng: loc.lng,
+                  }))}
+                  className="h-64"
+                />
               </div>
             )}
 

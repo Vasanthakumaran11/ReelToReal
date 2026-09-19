@@ -148,28 +148,32 @@ export default function Plans({
   };
 
   return (
-    <div className="relative pb-16">
-      {/* Scenic Coastal Banner Header */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-b from-[#bde0fe] via-[#d0e8ff] to-[#f0f9ff]/20 p-6 sm:p-10 mb-8 border border-sky-100 shadow-sm">
-        {/* Subtle background scenery illustration */}
-        <div
-          className="absolute inset-0 bg-cover bg-center opacity-40 mix-blend-multiply pointer-events-none"
-          style={{ backgroundImage: "url('/plans-bg.jpg')" }}
-        />
+    <div className="relative pb-16 space-y-8">
+      {/* Scenic Coastal Banner Header covering the entire hero landing section */}
+      <div className="relative min-h-[460px] sm:min-h-[520px] w-full overflow-hidden rounded-3xl bg-cover bg-center border border-sky-200/60 shadow-lg flex flex-col justify-between p-6 sm:p-12"
+        style={{ backgroundImage: "url('/plans-bg.jpg')" }}
+      >
+        {/* Soft atmospheric gradient wash ensuring the scenic image covers the whole hero while keeping text crisp */}
+        <div className="absolute inset-0 bg-gradient-to-b from-white/20 via-sky-100/35 to-sky-900/40 pointer-events-none" />
 
+        {/* Top Content Row */}
         <div className="relative z-10 flex flex-col justify-between sm:flex-row sm:items-start gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl lg:text-4xl">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3.5 py-1 text-xs font-bold text-[#0284c7] backdrop-blur-md shadow-xs border border-white/50 mb-3">
+              <Sparkles className="h-3.5 w-3.5 text-[#0284c7]" />
+              <span>AI-Powered Itinerary Planner</span>
+            </div>
+            <h1 className="text-3xl font-extrabold tracking-tight text-slate-950 sm:text-4xl lg:text-5xl drop-shadow-xs">
               Plan Your Next Adventure
             </h1>
-            <p className="mt-2 text-sm sm:text-base font-normal text-slate-600 max-w-xl">
-              Turn your saved moments into meaningful trips and experiences.
+            <p className="mt-2.5 text-base sm:text-lg font-medium text-slate-800 max-w-xl leading-relaxed drop-shadow-xs">
+              Turn your saved moments into meaningful trips, itineraries, and unforgettable experiences.
             </p>
           </div>
 
           {/* Top-Right Decorative "Explore Plan Relive ♡" */}
           <div className="select-none pointer-events-none self-end sm:self-auto flex items-center gap-2 text-right">
-            <span className="font-serif italic text-sm sm:text-base text-[#0284c7] font-medium leading-tight block">
+            <span className="font-serif italic text-base sm:text-lg text-[#0369a1] font-semibold leading-tight block drop-shadow-xs">
               Explore<br />
               Plan<br />
               Relive ♡
@@ -177,10 +181,10 @@ export default function Plans({
           </div>
         </div>
 
-        {/* Floating AI Prompt Bar */}
+        {/* Floating AI Prompt Bar at base of Hero */}
         <form
           onSubmit={handleSubmit}
-          className="relative z-10 mt-8 flex flex-col sm:flex-row items-center gap-3 rounded-2xl sm:rounded-3xl bg-white p-2.5 sm:p-3 shadow-xl border border-slate-100"
+          className="relative z-10 mt-8 flex flex-col sm:flex-row items-center gap-3 rounded-2xl sm:rounded-3xl bg-white/95 backdrop-blur-md p-3 sm:p-4 shadow-2xl border border-white/80"
         >
           <div className="flex flex-1 items-center gap-3 px-3 w-full">
             <Sparkles className="h-5 w-5 text-[#2563eb] shrink-0" />
@@ -189,7 +193,7 @@ export default function Plans({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Where would you like to go? (e.g., Plan my weekend in Chennai, food trip in Bangalore...)"
-              className="w-full text-sm sm:text-base text-slate-800 placeholder-slate-400 focus:outline-none bg-transparent"
+              className="w-full text-sm sm:text-base text-slate-900 font-medium placeholder-slate-400 focus:outline-none bg-transparent"
               disabled={crafting}
             />
           </div>
@@ -197,7 +201,7 @@ export default function Plans({
           <button
             type="submit"
             disabled={crafting || !prompt.trim()}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563eb] px-6 py-3 text-sm font-semibold text-white shadow-xs hover:bg-blue-700 transition-colors disabled:opacity-50 whitespace-nowrap"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563eb] px-7 py-3.5 text-sm font-semibold text-white shadow-md hover:bg-blue-700 transition-all disabled:opacity-50 whitespace-nowrap"
           >
             {crafting ? "Crafting Plan..." : "Create Plan"}
             <ArrowRight className="h-4 w-4" />

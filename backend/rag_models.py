@@ -49,7 +49,19 @@ class AnswerItem(BaseModel):
     name: str
     city: Optional[str] = None
     price: Optional[str] = None
+    famous_product: Optional[str] = None
+    tagline: Optional[str] = None
+    location_text: Optional[str] = None
+    best_time_to_visit: Optional[str] = None
+    category: Optional[str] = None
+    vibe: Optional[str] = None
+    key_points: List[Dict[str, str]] = Field(default_factory=list)
+    detailed_description: Optional[str] = None
     note: str = ""
+    thumbnail_url: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    formatted_address: Optional[str] = None
     reel_id: str
 
 

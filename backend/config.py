@@ -26,8 +26,14 @@ MAX_DIRECT_VIDEO_SIZE_BYTES = int(os.getenv("MAX_DIRECT_VIDEO_SIZE_MB", "50")) *
 
 # Model configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-_raw_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-GEMINI_MODEL = "gemini-3.1-flash-lite" if _raw_model in ("gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.6-flash") else _raw_model
+GEMINI_BACKUP_API_KEY = os.getenv("GEMINI_BACKUP_API_KEY")
+GEMINI_MODEL = "gemini-3.6-flash"
+
+def get_gemini_client(backup: bool = False):
+    """Instantiate Google GenAI Client with primary key, or backup key on demand."""
+    from google import genai
+    key = GEMINI_BACKUP_API_KEY if backup else (GEMINI_API_KEY or GEMINI_BACKUP_API_KEY)
+    return genai.Client(api_key=key)
 
 def get_tool_path(name: str) -> str:
     """Find the path to yt-dlp, ffmpeg, or ffprobe with fallback search in common Windows Winget directories."""

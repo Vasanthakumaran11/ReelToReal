@@ -79,23 +79,25 @@ class IngestUrlRequest(BaseModel):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    """Retrieve saved Reels and answer only from that retrieved context."""
-    if not request.query.strip():
+def chat(request: ChatRequest, db: Optional[Session] = Depends(get_db)):
+    """Retrieve saved Reels and answer only from that retrieved context using Gemini RAG."""
+    query = request.query.strip()
+    if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
-    if not db:
-        return ChatResponse(
-            answer="Your saved Reels are not available from the database right now.",
-            insufficient_info=True,
-        )
     try:
-        retrieval = retrieve(db, request.query.strip(), history=request.history)
-        return answer(request.query.strip(), retrieval, request.history)
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        retrieval = retrieve(db, query, history=request.history)
+        return answer(query, retrieval, request.history)
     except Exception as exc:
         print(f"[Error] RAG chat failed: {exc}")
-        raise HTTPException(status_code=502, detail="RAG service is temporarily unavailable.") from exc
+        try:
+            retrieval = retrieve(None, query, history=request.history)
+            return answer(query, retrieval, request.history)
+        except Exception as e2:
+            print(f"[Fatal] RAG fallback failed: {e2}")
+            return ChatResponse(
+                answer="I'm having a brief connection issue reaching your saved reels. Please try asking again in a moment.",
+                insufficient_info=True,
+            )
 
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
@@ -263,11 +265,11 @@ def list_plans(db: Session = Depends(get_db)):
     return [_with_plan_thumbnail(p) for p in plans]
 
 @app.post("/api/plan")
-def craft_plan(request: PlanRequest, db: Session = Depends(get_db)):
+def craft_plan(request: PlanRequest, db: Optional[Session] = Depends(get_db)):
     """
     RAG-powered AI Plan Generator:
     1. Embeds question using Gemini
-    2. Performs vector similarity search in PostgreSQL pgvector
+    2. Performs vector similarity search across saved reels
     3. Prompts Gemini with matching reels to construct an actionable itinerary
     """
     question = request.question.strip()
@@ -278,26 +280,37 @@ def craft_plan(request: PlanRequest, db: Session = Depends(get_db)):
     reel_ids = []
     locations = []
 
-    # 1. Vector similarity search if DB is active
-    if db and GEMINI_API_KEY:
-        try:
-            q_vec = generate_embedding(question)
-            matches = crud.search_reels_by_vector(db, q_vec, limit=4)
-            for reel, dist in matches:
-                context_reels.append(f"- Place: {reel.place} ({reel.city})\n  Summary: {reel.summary}\n  Foods: {', '.join(reel.foods or [])}\n  Tips: {reel.tip_summary}")
-                reel_ids.append(reel.video_id)
-                if reel.latitude and reel.longitude:
-                    locations.append({
-                        "name": reel.place or reel.city,
-                        "lat": reel.latitude,
-                        "lng": reel.longitude,
-                        "tone": "start" if len(locations) == 0 else "mid"
-                    })
-        except Exception as e:
-            print(f"[Warning] Vector search failed: {e}")
+    # 1. Use robust RAG retrieval powered by Gemini embeddings
+    try:
+        retrieval = retrieve(db, question, top_k=5)
+        for item in retrieval.results:
+            context_reels.append(f"- Place: {item.title} ({item.city or 'Nearby'})\n  Details: {item.matched_text[:250]}\n  Tips: {item.price}")
+            reel_ids.append(item.reel_id)
+    except Exception as e:
+        print(f"[Warning] RAG retrieval for plan failed: {e}")
+
+    # Fallback to direct saved reels list if context is empty
+    from retriever import _get_saved_reels_fallback
+    all_reels = _get_saved_reels_fallback()
+    if not context_reels:
+        for r in all_reels[:4]:
+            context_reels.append(f"- Place: {r.get('place')} ({r.get('city')})\n  Summary: {r.get('summary')}")
+            reel_ids.append(str(r.get("video_id") or ""))
+
+    # Extract location coordinates for OpenStreetMap route mapping
+    reel_map = {str(r.get("video_id") or ""): r for r in all_reels}
+    for rid in reel_ids:
+        r = reel_map.get(rid)
+        if r and r.get("location") and isinstance(r["location"], dict) and r["location"].get("latitude") and r["location"].get("longitude"):
+            locations.append({
+                "name": r.get("place") or r.get("city") or "Stop",
+                "lat": float(r["location"]["latitude"]),
+                "lng": float(r["location"]["longitude"]),
+                "tone": "start" if len(locations) == 0 else "mid"
+            })
 
     # 2. Call Gemini to synthesize a structured plan grounded in the retrieved reels
-    plan_data = _generate_ai_itinerary_plan(question, context_reels, locations, reel_ids)
+    plan_data = _generate_ai_itinerary_plan(question, context_reels, locations, reel_ids, reel_map)
 
     # 3. Persist plan to DB if available
     if db:
@@ -307,28 +320,85 @@ def craft_plan(request: PlanRequest, db: Session = Depends(get_db)):
             print(f"[Warning] Failed saving plan to DB: {e}")
     return _with_plan_thumbnail(plan_data)
 
+def _enrich_timeline_with_reels(
+    timeline: List[Dict[str, Any]],
+    reel_ids: List[str],
+    reel_map: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Grounds each AI-written timeline stop with factual data from its matching saved reel
+    (image, price, category, exact coordinates) by simple positional order, since the
+    reels were handed to Gemini in this same order when the itinerary was written.
+    """
+    for i, stage in enumerate(timeline):
+        if i >= len(reel_ids):
+            continue
+        r = reel_map.get(reel_ids[i])
+        if not r:
+            continue
+
+        r = _with_thumbnail(r)
+        stage["reel_id"] = reel_ids[i]
+        if r.get("thumbnail_url"):
+            stage["thumbnail_url"] = r["thumbnail_url"]
+        if r.get("city"):
+            stage["city"] = r["city"]
+        price = r.get("tip_summary") or r.get("price")
+        if price:
+            stage["price"] = price
+        if r.get("category"):
+            stage["category"] = r["category"]
+
+        loc = r.get("location")
+        if isinstance(loc, dict):
+            if loc.get("formatted_address"):
+                stage["location_text"] = loc["formatted_address"]
+            if loc.get("latitude") and loc.get("longitude"):
+                stage["latitude"] = float(loc["latitude"])
+                stage["longitude"] = float(loc["longitude"])
+        if not stage.get("location_text") and r.get("city"):
+            stage["location_text"] = r["city"]
+    return timeline
+
+
 def _generate_ai_itinerary_plan(
     question: str,
     context_reels: List[str],
     locations: List[Dict[str, Any]],
-    reel_ids: List[str]
+    reel_ids: List[str],
+    reel_map: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Uses Gemini to synthesize an actionable itinerary plan."""
+    """Uses Gemini to synthesize an actionable, richly detailed itinerary plan."""
     plan_id = f"plan_{uuid.uuid4().hex[:10]}"
+    reel_map = reel_map or {}
+
+    def _fallback_timeline() -> List[Dict[str, Any]]:
+        """Builds a timeline straight from the matched reels when Gemini is unavailable."""
+        stages = []
+        for i, rid in enumerate(reel_ids[:5]):
+            r = reel_map.get(rid) or {}
+            name = r.get("place") or r.get("destination") or r.get("city") or f"Stop {i + 1}"
+            tone = "start" if i == 0 else ("end" if i == len(reel_ids) - 1 else "mid")
+            stages.append({
+                "label": name,
+                "detail": r.get("tip_summary") or r.get("summary") or "Explore this saved spot",
+                "tone": tone,
+                "detailed_description": r.get("summary") or "",
+            })
+        if not stages:
+            stages = [{"label": "Explore Spots", "detail": "Visit recommended places", "tone": "start"}]
+        return stages
 
     if not GEMINI_API_KEY:
+        timeline = _enrich_timeline_with_reels(_fallback_timeline(), reel_ids, reel_map)
         return {
             "plan_id": plan_id,
             "title": question[:40],
             "question": question,
-            "created_at": "2026-09-19",
             "reel_ids": reel_ids,
             "timeline_label": "AI Plan (Offline)",
-            "timeline": [
-                {"label": "Arrival", "detail": "Arrive at primary destination", "tone": "start"},
-                {"label": "Main Activity", "detail": "Explore recommended spots"},
-                {"label": "Food & Dining", "detail": "Enjoy authentic meal", "tone": "end"}
-            ],
+            "overview": f"A self-guided trip built from your saved reels for \"{question}\". Full AI narration is unavailable right now, so follow the stops below in order using the live map for directions.",
+            "timeline": timeline,
             "key_dates": [{"date": "Upcoming Trip", "window": "Full Day", "note": "Flexible schedule"}],
             "locations": locations,
             "steps": [{"label": "Pack essentials", "done": False}],
@@ -338,18 +408,31 @@ def _generate_ai_itinerary_plan(
     client = genai.Client(api_key=GEMINI_API_KEY)
     context_text = "\n".join(context_reels) if context_reels else "No specific reel match found. Provide a general realistic itinerary."
 
-    prompt = f"""You are the ReelToReal Itinerary Planner.
+    prompt = f"""You are the ReelToReal Itinerary Planner, a friendly and knowledgeable trip-planning companion.
 User request: "{question}"
 
-Relevant reels retrieved from our database:
+Relevant reels retrieved from our database, in visiting order:
 {context_text}
 
-Generate an actionable, structured itinerary in JSON matching this exact schema:
+Generate an actionable, richly detailed itinerary in JSON matching this exact schema:
 {{
   "title": "Short compelling title",
   "timeline_label": "Summary label of the trip flow",
+  "overview": "5-7 sentence rich narrative describing the overall trip: the atmosphere, why it's worth doing, and the logical pathway connecting the stops in order.",
   "timeline": [
-    {{"label": "Stop name", "detail": "What to do or eat", "tone": "start | mid | end"}}
+    {{
+      "label": "Stop name (must match one of the Relevant reels' place names above, in the same order)",
+      "detail": "Short one-line action for this stop (what to do or eat)",
+      "tone": "start | mid | end",
+      "tagline": "Short punchy subtitle for this stop",
+      "best_time_to_visit": "e.g. Morning 8:00 - 10:00 AM",
+      "vibe": "e.g. Nature, Relaxing, Family-friendly",
+      "key_points": [
+        {{"title": "Highlight title", "desc": "One-sentence detail"}}
+      ],
+      "detailed_description": "3-4 sentence rich paragraph about this specific stop: atmosphere, what makes it worth visiting, and any tips.",
+      "travel_note": "How to get to this stop from the previous one (direction, rough distance/time) — the pathway between stops"
+    }}
   ],
   "key_dates": [
     {{"date": "Day or timing", "window": "e.g. 8:00 AM - 11:00 AM", "note": "Actionable advice"}}
@@ -359,9 +442,10 @@ Generate an actionable, structured itinerary in JSON matching this exact schema:
   ],
   "packing": [
     {{"label": "Item to bring", "done": false}}
-  ],
-  "overview": "2-3 sentence overview of the trip"
+  ]
 }}
+
+Only use facts grounded in the relevant reels above. Provide 2-4 key_points per stop. The timeline must have exactly one entry per relevant reel listed above, in the same order.
 """
     try:
         res = client.models.generate_content(
@@ -377,15 +461,18 @@ Generate an actionable, structured itinerary in JSON matching this exact schema:
         plan_json["question"] = question
         plan_json["reel_ids"] = reel_ids
         plan_json["locations"] = locations
+        plan_json["timeline"] = _enrich_timeline_with_reels(plan_json.get("timeline") or [], reel_ids, reel_map)
         return plan_json
     except Exception as e:
         print(f"[Error] Gemini plan generation failed: {e}")
+        timeline = _enrich_timeline_with_reels(_fallback_timeline(), reel_ids, reel_map)
         return {
             "plan_id": plan_id,
             "title": question[:40],
             "question": question,
             "reel_ids": reel_ids,
-            "timeline": [{"label": "Activity", "detail": "Explore spots", "tone": "start"}],
+            "overview": f"A self-guided trip built from your saved reels for \"{question}\". Follow the stops below in order using the live map for directions.",
+            "timeline": timeline,
             "locations": locations,
             "steps": [{"label": "Verify travel route", "done": False}]
         }
